@@ -1,73 +1,73 @@
-# ✅ app.py
-
 from flask import Flask, request, jsonify
-import torch
 import pickle
-from sentence_transformers import util
+import os
 from rapidfuzz import fuzz
 import re
 
-# 🔹 Load precomputed data
-embeddings = torch.load("amibot_data/field_embeddings.pt")
+# 🔧 Load preprocessed data (no transformers)
+DATA_DIR = "amibot_data"
 
-with open("amibot_data/query_list.pkl", "rb") as f:
-    query_list = pickle.load(f)
+with open(os.path.join(DATA_DIR, "field_variants.pkl"), "rb") as f:
+    field_variants = pickle.load(f)
 
-with open("amibot_data/variant_to_response.pkl", "rb") as f:
-    variant_to_response = pickle.load(f)
+with open(os.path.join(DATA_DIR, "field_map.pkl"), "rb") as f:
+    field_map = pickle.load(f)
 
-# 🔹 Load model just for encoding user input
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-# ✅ Create Flask app
-app = Flask(__name__)
-
-# ✅ Clean input
-def clean(text):
+# 🔧 Text cleaning
+def clean_text(text):
     text = text.strip().lower()
     text = re.sub(r"[^\w\s]", "", text)
     return text
 
-@app.route("/amibot", methods=["POST"])
-def amibot():
-    data = request.get_json()
-    user_input = data.get("message", "")
+# 🤖 Fuzzy-only matching response
+def get_response(user_input, field_variants, field_map, fuzz_threshold=60):
+    original_input = user_input.strip()
+    cleaned_input = clean_text(original_input)
 
-    if not user_input:
-        return jsonify({"error": "No input provided"}), 400
+    best_field = None
+    best_score = -1
 
-    cleaned_input = clean(user_input)
-    input_embedding = model.encode(cleaned_input, convert_to_tensor=True)
+    for variant in field_variants:
+        score = fuzz.token_set_ratio(cleaned_input, variant.lower())
+        if score > best_score:
+            best_score = score
+            best_field = variant
 
-    # 🔍 Semantic similarity
-    cosine_scores = util.cos_sim(input_embedding, embeddings)[0]
-    top_idx = torch.argmax(cosine_scores).item()
-    top_score = cosine_scores[top_idx].item()
-
-    best_query = query_list[top_idx]
-    best_response = variant_to_response[best_query]
-
-    # 🧠 Extra filter: If semantic score is low, check fuzz
-    fuzz_score = fuzz.ratio(cleaned_input, best_query)
-
-    if top_score > 0.55 or fuzz_score > 70:
-        return jsonify({
-            "query_matched": best_query,
-            "similarity": round(top_score, 3),
-            "fuzz_score": fuzz_score,
-            "response": best_response
-        })
+    if best_score >= fuzz_threshold:
+        return {
+            "matched": best_field,
+            "fuzzy_score": best_score,
+            "response": field_map[best_field]
+        }
     else:
-        return jsonify({
-            "response": "I’m not sure how to answer that. Could you rephrase or ask something else?"
-        })
+        return {
+            "matched": best_field,
+            "fuzzy_score": best_score,
+            "response": f"🤖 Sorry, I’m not sure what you meant.\n💡 Did you mean: '{best_field}'?\nPlease rephrase your question."
+        }
 
-# 🔁 Ping route for cron job or uptime monitor
-@app.route("/ping", methods=["GET"])
+# 🚀 Flask app
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "🧠 AmiBot is running!"
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    data = request.json
+    user_input = data.get("query", "")
+
+    if not user_input.strip():
+        return jsonify({"error": "Empty query provided."}), 400
+
+    result = get_response(user_input, field_variants, field_map)
+    return jsonify(result)
+
+# ✅ Cron job ping route
+@app.route("/ping")
 def ping():
-    return jsonify({"status": "ok", "message": "AmiBot is alive"}), 200
+    return "pong"
 
-# ✅ Run
 if __name__ == "__main__":
     app.run(debug=True)
