@@ -1,10 +1,6 @@
-flask
-flask-cors
-gunicorn
-pandas
-nltk
-sentence-transformers
-rapidfuzz
 torch
-flask-compress
-numpy
+sentence-transformers
+transformers
+flask
+rapidfuzz
+gunicorn
